@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradingView Real-Time Chart & Bybit V5 WebSockets</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #131722; color: #d1d4dc;
+      font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif;
+      overflow: hidden; height: 100vh; display: flex; flex-direction: column;
+      user-select: none; -webkit-user-select: none;
+    }
+    header {
+      background-color: #1e222d; border-bottom: 1px solid #2a2e39;
+      height: 44px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 14px; flex-shrink: 0; font-size: 13px;
+    }
+    .header-left, .header-right { display: flex; align-items: center; gap: 10px; }
+    .symbol-select, .tf-btn, .action-btn {
+      background-color: #2a2e39; color: #d1d4dc; border: 1px solid #363c4e;
+      border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; outline: none;
+    }
+    .tf-btn.active { background-color: #2962ff; color: #fff; border-color: #2962ff; font-weight: 600; }
+    .status-badge {
+      display: flex; align-items: center; gap: 6px; font-size: 11px;
+      font-family: 'JetBrains Mono', monospace; padding: 3px 8px; border-radius: 12px;
+      background-color: rgba(42, 46, 57, 0.6); border: 1px solid #2a2e39;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background-color: #f23645; }
+    .status-dot.connected { background-color: #089981; box-shadow: 0 0 6px rgba(8, 153, 129, 0.8); }
+    .status-dot.connecting { background-color: #f7a600; }
+    .live-price-box { display: flex; align-items: baseline; gap: 6px; font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 14px; }
+    .price-up { color: #089981 !important; }
+    .price-down { color: #f23645 !important; }
+    #chart-wrapper { position: relative; flex: 1; display: flex; flex-direction: column; overflow: hidden; width: 100%; }
+    .chart-pane { width: 100%; position: relative; overflow: hidden; user-select: none; pointer-events: auto; }
+    #main-chart { height: 75%; border-bottom: 1px solid #2a2e39; }
+    #sub-chart { height: 25%; }
+    .chart-legend {
+      position: absolute; top: 10px; left: 14px; z-index: 10; font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: #787b86; display: flex; align-items: center; gap: 10px;
+      background: rgba(19, 23, 34, 0.85); backdrop-filter: blur(4px); padding: 4px 8px;
+      border-radius: 4px; border: 1px solid rgba(42, 46, 57, 0.6); pointer-events: none;
+    }
+    .chart-legend span span { color: #d1d4dc; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <select id="symbolSelect" class="symbol-select">
+        <option value="BTCUSDT" selected>BTC/USDT</option>
+        <option value="ETHUSDT">ETH/USDT</option>
+        <option value="SOLUSDT">SOL/USDT</option>
+        <option value="BNBUSDT">BNB/USDT</option>
+        <option value="DOGEUSDT">DOGE/USDT</option>
+      </select>
+      <div id="timeframeGroup" style="display: flex; gap: 4px;">
+        <button class="tf-btn active" data-tf="1m">1м</button>
+        <button class="tf-btn" data-tf="5m">5м</button>
+        <button class="tf-btn" data-tf="15m">15м</button>
+        <button class="tf-btn" data-tf="1h">1ч</button>
+        <button class="tf-btn" data-tf="4h">4ч</button>
+        <button class="tf-btn" data-tf="1D">1Д</button>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-price-box">
+        <span style="color: #787b86; font-size: 11px;">ЦЕНА:</span>
+        <span id="livePriceText" class="live-price">---</span>
+      </div>
+      <div class="status-badge">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Подключение...</span>
+      </div>
+    </div>
+  </header>
+  <div id="chart-wrapper">
+    <div id="main-chart" class="chart-pane">
+      <div id="mainLegend" class="chart-legend">
+        <span>O: <span>---</span></span><span>H: <span>---</span></span>
+        <span>L: <span>---</span></span><span>C: <span>---</span></span>
+        <span>V: <span>---</span></span>
+      </div>
+    </div>
+    <div id="sub-chart" class="chart-pane">
+      <div class="chart-legend" style="top: 6px;">
+        <span style="color: #9c27b0; font-weight: 600;">RSI (14)</span>
+        <span id="rsiValueText" style="color: #d1d4dc;">---</span>
+      </div>
+    </div>
+  </div>
+  <script>
+    let currentSymbol = "BTCUSDT";
+    let currentTimeframe = "1m";
+    let candles = [];
+    let ws = null, fallbackWs = null, pingInterval = null;
+
+    const mainChartContainer = document.getElementById("main-chart");
+    const subChartContainer = document.getElementById("sub-chart");
+    const livePriceText = document.getElementById("livePriceText");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const mainLegend = document.getElementById("mainLegend");
+    const rsiValueText = document.getElementById("rsiValueText");
+
+    const mainChart = LightweightCharts.createChart(mainChartContainer, {
+      layout: { background: { type: LightweightCharts.ColorType.Solid, color: "#131722" }, textColor: "#787b86", fontSize: 12 },
+      grid: { vertLines: { color: "rgba(42, 46, 57, 0.4)" }, horzLines: { color: "rgba(42, 46, 57, 0.4)" } },
+      handleScale: { mouseWheel: true, pinch: true },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, mouseDrag: true },
+      timeScale: { borderColor: "#2a2e39", timeVisible: true }
+    });
+
+    const candleSeries = mainChart.addCandlestickSeries({ upColor: "#089981", downColor: "#f23645", borderVisible: false, wickUpColor: "#089981", wickDownColor: "#f23645" });
+    const volumeSeries = mainChart.addHistogramSeries({ color: "#26a69a", priceFormat: { type: "volume" }, priceScaleId: "volume" });
+    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+
+    const subChart = LightweightCharts.createChart(subChartContainer, {
+      layout: { background: { type: LightweightCharts.ColorType.Solid, color: "#131722" }, textColor: "#787b86", fontSize: 11 },
+      grid: { vertLines: { color: "rgba(42, 46, 57, 0.4)" }, horzLines: { color: "rgba(42, 46, 57, 0.4)" } },
+      handleScale: { mouseWheel: true, pinch: true },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, mouseDrag: true },
+      timeScale: { visible: false }
+    });
+    const rsiSeries = subChart.addLineSeries({ color: "#9c27b0", lineWidth: 2 });
+
+    let isSyncing = false;
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+      if (isSyncing || !r) return;
+      isSyncing = true; subChart.timeScale().setVisibleLogicalRange(r); isSyncing = false;
+    });
+    subChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+      if (isSyncing || !r) return;
+      isSyncing = true; mainChart.timeScale().setVisibleLogicalRange(r); isSyncing = false;
+    });
+
+    const ro = new ResizeObserver(() => {
+      mainChart.applyOptions({ width: mainChartContainer.clientWidth, height: mainChartContainer.clientHeight });
+      subChart.applyOptions({ width: subChartContainer.clientWidth, height: subChartContainer.clientHeight });
+    });
+    ro.observe(mainChartContainer); ro.observe(subChartContainer);
+
+    mainChart.subscribeCrosshairMove(p => {
+      if (!p || !p.seriesData) return;
+      const c = p.seriesData.get(candleSeries);
+      const v = p.seriesData.get(volumeSeries);
+      if (c && c.open !== undefined) {
+        const color = c.close >= c.open ? "#089981" : "#f23645";
+        mainLegend.innerHTML = `<span>O: <span>${c.open.toFixed(2)}</span></span><span>H: <span>${c.high.toFixed(2)}</span></span><span>L: <span>${c.low.toFixed(2)}</span></span><span>C: <span style="color: ${color}">${c.close.toFixed(2)}</span></span>${v ? `<span>V: <span>${v.value.toFixed(2)}</span></span>` : ""}`;
+      }
+    });
+
+    function calculateRSI(list, period = 14) {
+      if (list.length <= period) return [];
+      const res = []; let g = 0, l = 0;
+      for (let i = 1; i <= period; i++) {
+        const d = list[i].close - list[i-1].close;
+        if (d >= 0) g += d; else l -= d;
+      }
+      let avgG = g / period, avgL = l / period;
+      res.push({ time: list[period].time, value: 100 - (100 / (1 + (avgL === 0 ? 100 : avgG / avgL))) });
+      for (let i = period + 1; i < list.length; i++) {
+        const d = list[i].close - list[i-1].close;
+        avgG = (avgG * (period - 1) + (d > 0 ? d : 0)) / period;
+        avgL = (avgL * (period - 1) + (d < 0 ? -d : 0)) / period;
+        res.push({ time: list[i].time, value: 100 - (100 / (1 + (avgL === 0 ? 100 : avgG / avgL))) });
+      }
+      return res;
+    }
+
+    async function loadData() {
+      let data = [];
+      try {
+        const res = await fetch(`http://localhost:8000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=200`);
+        const j = await res.json();
+        data = j.candles || [];
+      } catch (e) {
+        const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D" };
+        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${currentSymbol}&interval=${tfMap[currentTimeframe] || "1"}&limit=200`);
+        const j = await res.json();
+        if (j.result?.list) {
+          data = j.result.list.map(c => ({
+            time: Math.floor(parseInt(c[0]) / 1000),
+            open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5])
+          })).sort((a,b) => a.time - b.time);
+        }
+      }
+      if (data.length > 0) {
+        candles = data;
+        candleSeries.setData(candles);
+        volumeSeries.setData(candles.map(c => ({ time: c.time, value: c.volume, color: c.close >= c.open ? "rgba(8, 153, 129, 0.4)" : "rgba(242, 54, 69, 0.4)" })));
+        const rsiData = calculateRSI(candles, 14);
+        rsiSeries.setData(rsiData);
+        mainChart.timeScale().fitContent();
+        connectWebSocket();
+      }
+    }
+
+    function connectWebSocket() {
+      if (ws) { try { ws.close(); } catch(e){} }
+      if (fallbackWs) { try { fallbackWs.close(); } catch(e){} }
+      statusDot.className = "status-dot connecting";
+      statusText.textContent = "WS: Подключение...";
+
+      try {
+        ws = new WebSocket(`ws://localhost:8000/ws/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}`);
+        ws.onopen = () => { statusDot.className = "status-dot connected"; statusText.textContent = "WS: Подключено (main.py)"; };
+        ws.onmessage = (e) => handleRealtimeCandle(JSON.parse(e.data));
+        ws.onerror = () => connectFallback();
+      } catch (e) { connectFallback(); }
+    }
+
+    function connectFallback() {
+      if (fallbackWs) return;
+      const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D" };
+      fallbackWs = new WebSocket("wss://stream.bybit.com/v5/public/spot");
+      fallbackWs.onopen = () => {
+        statusDot.className = "status-dot connected"; statusText.textContent = "WS: Bybit Live";
+        fallbackWs.send(JSON.stringify({ op: "subscribe", args: [`kline.${tfMap[currentTimeframe] || "1"}.${currentSymbol}`] }));
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => fallbackWs.send(JSON.stringify({ op: "ping" })), 20000);
+      };
+      fallbackWs.onmessage = (e) => {
+        const j = JSON.parse(e.data);
+        if (j.data?.[0]) {
+          const k = j.data[0];
+          handleRealtimeCandle({
+            time: Math.floor(parseInt(k.start)/1000), open: parseFloat(k.open), high: parseFloat(k.high), low: parseFloat(k.low), close: parseFloat(k.close), volume: parseFloat(k.volume)
+          });
+        }
+      };
+      fallbackWs.onerror = () => { statusDot.className = "status-dot"; statusText.textContent = "WS: Ошибка"; };
+    }
+
+    function handleRealtimeCandle(c) {
+      if (!c || !c.time) return;
+      candleSeries.update(c);
+      volumeSeries.update({ time: c.time, value: c.volume, color: c.close >= c.open ? "rgba(8, 153, 129, 0.4)" : "rgba(242, 54, 69, 0.4)" });
+      const last = candles[candles.length - 1];
+      if (last && last.time === c.time) candles[candles.length - 1] = c;
+      else candles.push(c);
+
+      livePriceText.textContent = c.close.toFixed(2);
+      livePriceText.className = "live-price " + (c.close >= c.open ? "price-up" : "price-down");
+
+      const rsiData = calculateRSI(candles, 14);
+      if (rsiData.length > 0) {
+        const lastRsi = rsiData[rsiData.length - 1];
+        rsiSeries.update(lastRsi);
+        rsiValueText.textContent = lastRsi.value.toFixed(2);
+      }
+    }
+
+    document.getElementById("symbolSelect").addEventListener("change", (e) => { currentSymbol = e.target.value; loadData(); });
+    document.querySelectorAll(".tf-btn").forEach(b => {
+      b.addEventListener("click", () => {
+        document.querySelectorAll(".tf-btn").forEach(btn => btn.classList.remove("active"));
+        b.classList.add("active");
+        currentTimeframe = b.dataset.tf;
+        loadData();
+      });
+    });
+
+    loadData();
+  </script>
+</body>
+</html>
