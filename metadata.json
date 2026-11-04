@@ -1,0 +1,6 @@
+{
+  "name": "PineStudio - Open Trading & Backtesting Platform",
+  "description": "Free TradingView charting platform with custom Pine Script/JavaScript indicator & strategy editor and backtesting engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

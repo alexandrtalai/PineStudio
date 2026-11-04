@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradingView Real-Time Chart & Bybit V5 WebSockets</title>
+  <!-- Lightweight Charts Official CDN -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Google Fonts: JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #131722;
+      color: #d1d4dc;
+      font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* Верхняя панель управления в стиле TradingView */
+    header {
+      background-color: #1e222d;
+      border-bottom: 1px solid #2a2e39;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      flex-shrink: 0;
+      font-size: 13px;
+    }
+
+    .header-left, .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .symbol-select, .tf-btn, .action-btn {
+      background-color: #2a2e39;
+      color: #d1d4dc;
+      border: 1px solid #363c4e;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      outline: none;
+      transition: all 0.15s ease;
+    }
+
+    .symbol-select:hover, .tf-btn:hover, .action-btn:hover {
+      background-color: #363c4e;
+      color: #ffffff;
+    }
+
+    .tf-btn.active {
+      background-color: #2962ff;
+      color: #ffffff;
+      border-color: #2962ff;
+      font-weight: 600;
+    }
+
+    /* Статус WebSocket соединения */
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background-color: rgba(42, 46, 57, 0.6);
+      border: 1px solid #2a2e39;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: #f23645;
+      transition: background-color 0.2s ease;
+    }
+
+    .status-dot.connected {
+      background-color: #089981;
+      box-shadow: 0 0 6px rgba(8, 153, 129, 0.8);
+    }
+
+    .status-dot.connecting {
+      background-color: #f7a600;
+    }
+
+    /* Живая цена с анимацией тика */
+    .live-price-box {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .live-price {
+      transition: color 0.15s ease;
+    }
+
+    .price-up { color: #089981 !important; }
+    .price-down { color: #f23645 !important; }
+
+    /* Контейнеры графиков (75% / 25%) */
+    #chart-wrapper {
+      position: relative;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      width: 100%;
+    }
+
+    .chart-pane {
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: auto;
+    }
+
+    #main-chart {
+      height: 75%;
+      border-bottom: 1px solid #2a2e39;
+    }
+
+    #sub-chart {
+      height: 25%;
+    }
+
+    /* Оверлей легенды OHLCV на графике */
+    .chart-legend {
+      position: absolute;
+      top: 10px;
+      left: 14px;
+      z-index: 10;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #787b86;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(19, 23, 34, 0.85);
+      backdrop-filter: blur(4px);
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(42, 46, 57, 0.6);
+      pointer-events: none;
+    }
+
+    .chart-legend span span {
+      color: #d1d4dc;
+      font-weight: 500;
+    }
+
+    /* Наэкранная панель индикаторов в стиле TradingView */
+    .indicator-legend-bar {
+      position: absolute;
+      top: 42px;
+      left: 14px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .indicator-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(30, 34, 45, 0.9);
+      border: 1px solid rgba(42, 46, 57, 0.8);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      backdrop-filter: blur(4px);
+    }
+
+    .indicator-btn {
+      background: none;
+      border: none;
+      color: #787b86;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px;
+      border-radius: 2px;
+    }
+
+    .indicator-btn:hover {
+      color: #ffffff;
+      background-color: #2a2e39;
+    }
+
+    /* Индикатор подгрузки истории */
+    .loading-notice {
+      position: absolute;
+      top: 10px;
+      right: 65px;
+      z-index: 20;
+      background: rgba(41, 98, 255, 0.2);
+      border: 1px solid rgba(41, 98, 255, 0.5);
+      color: #2962ff;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ВЕРХНИЙ ТУЛБАР -->
+  <header>
+    <div class="header-left">
+      <select id="symbolSelect" class="symbol-select">
+        <option value="BTCUSDT" selected>BTC/USDT</option>
+        <option value="ETHUSDT">ETH/USDT</option>
+        <option value="SOLUSDT">SOL/USDT</option>
+        <option value="BNBUSDT">BNB/USDT</option>
+        <option value="DOGEUSDT">DOGE/USDT</option>
+      </select>
+
+      <div id="timeframeGroup" style="display: flex; gap: 4px;">
+        <button class="tf-btn active" data-tf="1m">1м</button>
+        <button class="tf-btn" data-tf="5m">5м</button>
+        <button class="tf-btn" data-tf="15m">15м</button>
+        <button class="tf-btn" data-tf="1h">1ч</button>
+        <button class="tf-btn" data-tf="4h">4ч</button>
+        <button class="tf-btn" data-tf="1D">1Д</button>
+      </div>
+
+      <button id="toggleRsiBtn" class="action-btn">RSI (14): ВКЛ</button>
+      <button id="toggleSmaBtn" class="action-btn">SMA (20): ВКЛ</button>
+    </div>
+
+    <div class="header-right">
+      <div class="live-price-box">
+        <span style="color: #787b86; font-size: 11px;">ЦЕНА:</span>
+        <span id="livePriceText" class="live-price">---</span>
+      </div>
+
+      <div class="status-badge" id="statusBadge" title="Статус WebSocket соединения">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Подключение...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- КОНТЕЙНЕР ДЛЯ ГРАФИКОВ -->
+  <div id="chart-wrapper">
+    <div id="loadingNotice" class="loading-notice">Загрузка истории...</div>
+
+    <!-- Главный график (75% высоты) -->
+    <div id="main-chart" class="chart-pane">
+      <div id="mainLegend" class="chart-legend">
+        <span>O: <span>---</span></span>
+        <span>H: <span>---</span></span>
+        <span>L: <span>---</span></span>
+        <span>C: <span>---</span></span>
+        <span>V: <span>---</span></span>
+      </div>
+
+      <!-- Наэкранная панель индикаторов как в TradingView -->
+      <div class="indicator-legend-bar">
+        <div class="indicator-pill" id="smaPill">
+          <span style="color: #f7a600; font-weight: 600;">SMA 20</span>
+          <button class="indicator-btn" id="smaEyeBtn" title="Скрыть/показать">👁</button>
+          <button class="indicator-btn" id="smaGearBtn" title="Настройки">⚙</button>
+          <button class="indicator-btn" id="smaTrashBtn" title="Удалить">🗑</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Окно осциллятора RSI (25% высоты) -->
+    <div id="sub-chart" class="chart-pane">
+      <div class="chart-legend" style="top: 6px;">
+        <span style="color: #9c27b0; font-weight: 600;">RSI (14)</span>
+        <span id="rsiValueText" style="color: #d1d4dc;">---</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЕ ---
+    let currentSymbol = "BTCUSDT";
+    let currentTimeframe = "1m";
+
+    let candles = [];
+    let isLoadingEarlier = false;
+    let ws = null;
+    let fallbackWs = null;
+    let pingInterval = null;
+
+    let showRsi = true;
+    let showSma = true;
+    let smaPeriod = 20;
+    let rsiPeriod = 14;
+
+    // Ссылки на элементы UI
+    const symbolSelect = document.getElementById("symbolSelect");
+    const tfButtons = document.querySelectorAll(".tf-btn");
+    const toggleRsiBtn = document.getElementById("toggleRsiBtn");
+    const toggleSmaBtn = document.getElementById("toggleSmaBtn");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const livePriceText = document.getElementById("livePriceText");
+    const mainLegend = document.getElementById("mainLegend");
+    const rsiValueText = document.getElementById("rsiValueText");
+    const loadingNotice = document.getElementById("loadingNotice");
+    const subChartContainer = document.getElementById("sub-chart");
+    const mainChartContainer = document.getElementById("main-chart");
+
+    // --- 1. ИНИЦИАЛИЗАЦИЯ LIGHTWEIGHT CHARTS С МАСШТАБИРОВАНИЕМ И СКРОЛЛОМ ---
+    const mainChart = LightweightCharts.createChart(mainChartContainer, {
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: "#131722" },
+        textColor: "#787b86",
+        fontSize: 12,
+        fontFamily: "'JetBrains Mono', monospace",
+      },
+      grid: {
+        vertLines: { color: "rgba(42, 46, 57, 0.4)" },
+        horzLines: { color: "rgba(42, 46, 57, 0.4)" },
+      },
+      crosshair: {
+        vertLine: { color: "#758696", width: 1, style: 3, labelBackgroundColor: "#2a2e39" },
+        horzLine: { color: "#758696", width: 1, style: 3, labelBackgroundColor: "#2a2e39" },
+      },
+      // Явное включение масштабирования колесиком и перетаскивания мышью:
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true }
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+        mouseDrag: true
+      },
+      timeScale: {
+        borderColor: "#2a2e39",
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      rightPriceScale: {
+        borderColor: "#2a2e39",
+        autoScale: true,
+      },
+    });
+
+    // Свечная серия
+    const candleSeries = mainChart.addCandlestickSeries({
+      upColor: "#089981",
+      downColor: "#f23645",
+      borderVisible: false,
+      wickUpColor: "#089981",
+      wickDownColor: "#f23645",
+    });
+
+    // Серия объемов
+    const volumeSeries = mainChart.addHistogramSeries({
+      color: "#26a69a",
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
+    // Линия SMA на главном графике
+    const smaSeries = mainChart.addLineSeries({
+      color: "#f7a600",
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: "SMA",
+    });
+
+    // --- 2. ИНИЦИАЛИЗАЦИЯ ОКНА ОСЦИЛЛЯТОРА RSI (25% высоты) ---
+    const subChart = LightweightCharts.createChart(subChartContainer, {
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: "#131722" },
+        textColor: "#787b86",
+        fontSize: 11,
+        fontFamily: "'JetBrains Mono', monospace",
+      },
+      grid: {
+        vertLines: { color: "rgba(42, 46, 57, 0.4)" },
+        horzLines: { color: "rgba(42, 46, 57, 0.4)" },
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+        mouseDrag: true
+      },
+      timeScale: {
+        visible: false, // Время скрыто, синхронизируется с верхним графиком
+        borderColor: "#2a2e39",
+      },
+      rightPriceScale: {
+        borderColor: "#2a2e39",
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+    });
+
+    const rsiSeries = subChart.addLineSeries({
+      color: "#9c27b0",
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+
+    // Уровни перекупленности и перепроданности 70 и 30
+    rsiSeries.createPriceLine({ price: 70, color: "rgba(242, 54, 69, 0.5)", lineWidth: 1, lineStyle: 2, title: "70" });
+    rsiSeries.createPriceLine({ price: 30, color: "rgba(8, 153, 129, 0.5)", lineWidth: 1, lineStyle: 2, title: "30" });
+
+    // Синхронизация временных шкал между главным графиком и RSI без циклов
+    let isSyncingRange = false;
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (isSyncingRange || !range || !showRsi) return;
+      isSyncingRange = true;
+      try {
+        subChart.timeScale().setVisibleLogicalRange(range);
+      } catch (e) {}
+      isSyncingRange = false;
+    });
+
+    subChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (isSyncingRange || !range) return;
+      isSyncingRange = true;
+      try {
+        mainChart.timeScale().setVisibleLogicalRange(range);
+      } catch (e) {}
+      isSyncingRange = false;
+    });
+
+    // --- 3. ИСПРАВЛЕННЫЙ RESIZEOBSERVER БЕЗ МЕРЦАНИЯ И ЦИКЛОВ ---
+    let lastMainW = 0, lastMainH = 0;
+    let lastSubW = 0, lastSubH = 0;
+
+    const resizeObserver = new ResizeObserver(() => {
+      const mainW = mainChartContainer.clientWidth;
+      const mainH = mainChartContainer.clientHeight;
+      if (Math.abs(mainW - lastMainW) >= 1 || Math.abs(mainH - lastMainH) >= 1) {
+        lastMainW = mainW;
+        lastMainH = mainH;
+        mainChart.applyOptions({ width: mainW, height: mainH });
+      }
+
+      if (showRsi) {
+        const subW = subChartContainer.clientWidth;
+        const subH = subChartContainer.clientHeight;
+        if (Math.abs(subW - lastSubW) >= 1 || Math.abs(subH - lastSubH) >= 1) {
+          lastSubW = subW;
+          lastSubH = subH;
+          subChart.applyOptions({ width: subW, height: subH });
+        }
+      }
+    });
+
+    resizeObserver.observe(mainChartContainer);
+    resizeObserver.observe(subChartContainer);
+
+    // --- 4. ПРЯМОЕ ОБНОВЛЕНИЕ DOM-ЛЕГЕНДЫ CROSSHAIR (БЕЗ РЕ-РЕНДЕРА) ---
+    mainChart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time || !param.seriesData) return;
+      const candleData = param.seriesData.get(candleSeries);
+      const volData = param.seriesData.get(volumeSeries);
+
+      if (candleData && candleData.open !== undefined) {
+        const diff = (candleData.close - candleData.open).toFixed(2);
+        const sign = candleData.close >= candleData.open ? "+" : "";
+        const color = candleData.close >= candleData.open ? "#089981" : "#f23645";
+
+        mainLegend.innerHTML = `
+          <span>O: <span>${candleData.open.toFixed(2)}</span></span>
+          <span>H: <span>${candleData.high.toFixed(2)}</span></span>
+          <span>L: <span>${candleData.low.toFixed(2)}</span></span>
+          <span>C: <span style="color: ${color}; font-weight: 600;">${candleData.close.toFixed(2)}</span></span>
+          <span style="color: ${color}; font-weight: 600;">${sign}${diff}</span>
+          ${volData ? `<span>V: <span>${volData.value.toFixed(2)}</span></span>` : ""}
+        `;
+      }
+    });
+
+    // --- 5. МАТЕМАТИЧЕСКИЙ РАСЧЕТ ИНДИКАТОРОВ (SMA, RSI) ---
+    function calculateSMA(candleList, period) {
+      const result = [];
+      for (let i = period - 1; i < candleList.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += candleList[i - j].close;
+        result.push({ time: candleList[i].time, value: sum / period });
+      }
+      return result;
+    }
+
+    function calculateRSI(candleList, period = 14) {
+      if (candleList.length <= period) return [];
+      const result = [];
+      let gains = 0, losses = 0;
+
+      for (let i = 1; i <= period; i++) {
+        const diff = candleList[i].close - candleList[i - 1].close;
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+      }
+
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
+      let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      result.push({ time: candleList[period].time, value: 100 - (100 / (1 + rs)) });
+
+      for (let i = period + 1; i < candleList.length; i++) {
+        const diff = candleList[i].close - candleList[i - 1].close;
+        const currentGain = diff > 0 ? diff : 0;
+        const currentLoss = diff < 0 ? -diff : 0;
+
+        avgGain = (avgGain * (period - 1) + currentGain) / period;
+        avgLoss = (avgLoss * (period - 1) + currentLoss) / period;
+
+        rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        result.push({ time: candleList[i].time, value: 100 - (100 / (1 + rs)) });
+      }
+      return result;
+    }
+
+    function renderIndicators() {
+      if (candles.length === 0) return;
+
+      // SMA
+      if (showSma) {
+        const smaData = calculateSMA(candles, smaPeriod);
+        smaSeries.setData(smaData);
+      } else {
+        smaSeries.setData([]);
+      }
+
+      // RSI
+      if (showRsi) {
+        const rsiData = calculateRSI(candles, rsiPeriod);
+        rsiSeries.setData(rsiData);
+        if (rsiData.length > 0) {
+          rsiValueText.textContent = rsiData[rsiData.length - 1].value.toFixed(2);
+        }
+      } else {
+        rsiSeries.setData([]);
+      }
+    }
+
+    // --- 6. ЗАГРУЗКА ИСТОРИЧЕСКИХ ДАННЫХ И ПАГИНАЦИЯ НАЗАД ---
+    async function loadData(isLoadMore = false) {
+      if (isLoadMore && (isLoadingEarlier || candles.length === 0)) return;
+
+      if (isLoadMore) {
+        isLoadingEarlier = true;
+        loadingNotice.style.display = "block";
+      }
+
+      try {
+        let url = `http://localhost:8000/api/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}&limit=200`;
+
+        if (isLoadMore) {
+          // Время самой старой свечи для подгрузки до нее
+          const oldestTime = candles[0].time;
+          url += `&end=${oldestTime}`;
+        }
+
+        let newCandles = [];
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            newCandles = data.candles || [];
+          }
+        } catch (fetchErr) {
+          // Fallback: прямой запрос к Bybit REST если локальный сервер не запущен
+          const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D" };
+          let bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${currentSymbol}&interval=${tfMap[currentTimeframe] || "1"}&limit=200`;
+          if (isLoadMore) {
+            bybitUrl += `&end=${candles[0].time * 1000}`;
+          }
+          const res = await fetch(bybitUrl);
+          const data = await res.json();
+          if (data.retCode === 0 && data.result.list) {
+            newCandles = data.result.list.map(c => ({
+              time: Math.floor(parseInt(c[0]) / 1000),
+              open: parseFloat(c[1]),
+              high: parseFloat(c[2]),
+              low: parseFloat(c[3]),
+              close: parseFloat(c[4]),
+              volume: parseFloat(c[5])
+            })).sort((a, b) => a.time - b.time);
+          }
+        }
+
+        if (newCandles.length === 0) return;
+
+        if (isLoadMore) {
+          const existingTimes = new Set(candles.map(c => c.time));
+          const uniqueOlder = newCandles.filter(c => !existingTimes.has(c.time));
+
+          if (uniqueOlder.length > 0) {
+            const prependedCount = uniqueOlder.length;
+            candles = [...uniqueOlder, ...candles].sort((a, b) => a.time - b.time);
+
+            // Обновляем серии
+            candleSeries.setData(candles);
+            const volumeData = candles.map(c => ({
+              time: c.time,
+              value: c.volume,
+              color: c.close >= c.open ? "rgba(8, 153, 129, 0.4)" : "rgba(242, 54, 69, 0.4)"
+            }));
+            volumeSeries.setData(volumeData);
+            renderIndicators();
+
+            // ВАЖНО: сохраняем позицию экрана (сдвигаем диапазон на +prependedCount)
+            const currentRange = mainChart.timeScale().getVisibleLogicalRange();
+            if (currentRange) {
+              mainChart.timeScale().setVisibleLogicalRange({
+                from: currentRange.from + prependedCount,
+                to: currentRange.to + prependedCount
+              });
+            }
+          }
+        } else {
+          // Начальная загрузка
+          candles = newCandles;
+          candleSeries.setData(candles);
+
+          const volumeData = candles.map(c => ({
+            time: c.time,
+            value: c.volume,
+            color: c.close >= c.open ? "rgba(8, 153, 129, 0.4)" : "rgba(242, 54, 69, 0.4)"
+          }));
+          volumeSeries.setData(volumeData);
+          renderIndicators();
+
+          mainChart.timeScale().fitContent();
+
+          // Обновляем плашку цены
+          const lastCandle = candles[candles.length - 1];
+          if (lastCandle) updateLivePriceDisplay(lastCandle.close, lastCandle.open);
+
+          // После успешной загрузки истории запускаем живой WebSocket
+          connectWebSocket();
+        }
+      } catch (err) {
+        console.error("Ошибка при загрузке свечей:", err);
+      } finally {
+        isLoadingEarlier = false;
+        loadingNotice.style.display = "none";
+      }
+    }
+
+    // Подписка на дозагрузку при приближении к левому краю
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      if (range.from < 20 && !isLoadingEarlier) {
+        loadData(true);
+      }
+    });
+
+    // --- 7. WEBSOCKET РЕАЛЬНОГО ВРЕМЕНИ (.update()) ---
+    function updateLivePriceDisplay(currentPrice, openPrice) {
+      const prevPrice = parseFloat(livePriceText.textContent) || currentPrice;
+      livePriceText.textContent = currentPrice.toFixed(2);
+
+      livePriceText.classList.remove("price-up", "price-down");
+      if (currentPrice > prevPrice) {
+        livePriceText.classList.add("price-up");
+      } else if (currentPrice < prevPrice) {
+        livePriceText.classList.add("price-down");
+      }
+    }
+
+    function setStatus(state, message) {
+      statusDot.className = "status-dot " + state;
+      statusText.textContent = message;
+    }
+
+    function connectWebSocket() {
+      // Закрываем предыдущие соединения
+      if (ws) {
+        try { ws.close(); } catch(e) {}
+        ws = null;
+      }
+      if (fallbackWs) {
+        try { fallbackWs.close(); } catch(e) {}
+        fallbackWs = null;
+      }
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+
+      setStatus("connecting", "Подключение...");
+
+      const localWsUrl = `ws://localhost:8000/ws/candles?symbol=${currentSymbol}&timeframe=${currentTimeframe}`;
+
+      try {
+        ws = new WebSocket(localWsUrl);
+
+        ws.onopen = () => {
+          setStatus("connected", "WS: Подключено (main.py)");
+          console.log("WebSocket подключен к локальному бэкенду.");
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.error) {
+              console.warn(data.error);
+              connectDirectBybitWebSocket();
+              return;
+            }
+            handleRealtimeCandle(data);
+          } catch (e) {
+            console.error("Ошибка парсинга WS сообщения:", e);
+          }
+        };
+
+        ws.onerror = () => {
+          console.warn("Локальный бэкенд недоступен, переключаемся на прямой стрим Bybit...");
+          connectDirectBybitWebSocket();
+        };
+
+        ws.onclose = (event) => {
+          if (!event.wasClean && statusDot.className.includes("connecting")) {
+            connectDirectBybitWebSocket();
+          }
+        };
+
+      } catch (err) {
+        connectDirectBybitWebSocket();
+      }
+    }
+
+    // Резервный прямой WebSocket к Bybit V5 (если main.py еще не запущен)
+    function connectDirectBybitWebSocket() {
+      if (fallbackWs) return;
+
+      setStatus("connecting", "Прямой Bybit WS...");
+      const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D" };
+      const interval = tfMap[currentTimeframe] || "1";
+      const topic = `kline.${interval}.${currentSymbol}`;
+
+      fallbackWs = new WebSocket("wss://stream.bybit.com/v5/public/spot");
+
+      fallbackWs.onopen = () => {
+        setStatus("connected", "WS: Bybit Live");
+        fallbackWs.send(JSON.stringify({ op: "subscribe", args: [topic] }));
+
+        // Bybit keepalive ping каждые 20 сек
+        pingInterval = setInterval(() => {
+          if (fallbackWs && fallbackWs.readyState === WebSocket.OPEN) {
+            fallbackWs.send(JSON.stringify({ op: "ping" }));
+          }
+        }, 20000);
+      };
+
+      fallbackWs.onmessage = (event) => {
+        try {
+          const res = JSON.parse(event.data);
+          if (res.topic && res.topic.startsWith("kline") && res.data && res.data.length > 0) {
+            const k = res.data[0];
+            const liveCandle = {
+              time: Math.floor(parseInt(k.start) / 1000),
+              open: parseFloat(k.open),
+              high: parseFloat(k.high),
+              low: parseFloat(k.low),
+              close: parseFloat(k.close),
+              volume: parseFloat(k.volume),
+              confirm: k.confirm
+            };
+            handleRealtimeCandle(liveCandle);
+          }
+        } catch (e) {}
+      };
+
+      fallbackWs.onerror = () => {
+        setStatus("error", "WS: Ошибка");
+      };
+
+      fallbackWs.onclose = () => {
+        setStatus("error", "WS: Отключено");
+      };
+    }
+
+    // Мгновенное обновление свечи и объемов методом .update()
+    function handleRealtimeCandle(liveCandle) {
+      if (!liveCandle || !liveCandle.time) return;
+
+      // 1. Плавный апдейт свечи в серии без перезагрузки графика
+      candleSeries.update({
+        time: liveCandle.time,
+        open: liveCandle.open,
+        high: liveCandle.high,
+        low: liveCandle.low,
+        close: liveCandle.close,
+      });
+
+      // 2. Плавный апдейт объема
+      const isUp = liveCandle.close >= liveCandle.open;
+      volumeSeries.update({
+        time: liveCandle.time,
+        value: liveCandle.volume,
+        color: isUp ? "rgba(8, 153, 129, 0.4)" : "rgba(242, 54, 69, 0.4)"
+      });
+
+      // 3. Синхронизируем локальный массив свечей
+      if (candles.length > 0) {
+        const lastIndex = candles.length - 1;
+        if (candles[lastIndex].time === liveCandle.time) {
+          candles[lastIndex] = liveCandle;
+        } else if (liveCandle.time > candles[lastIndex].time) {
+          candles.push(liveCandle);
+        }
+      }
+
+      // 4. Обновляем тикер цены в тулбаре
+      updateLivePriceDisplay(liveCandle.close, liveCandle.open);
+
+      // 5. Пересчитываем последнее значение RSI и SMA вживую
+      if (showSma && candles.length >= smaPeriod) {
+        let sum = 0;
+        for (let i = 0; i < smaPeriod; i++) sum += candles[candles.length - 1 - i].close;
+        smaSeries.update({ time: liveCandle.time, value: sum / smaPeriod });
+      }
+
+      if (showRsi && candles.length > rsiPeriod) {
+        const rsiData = calculateRSI(candles, rsiPeriod);
+        if (rsiData.length > 0) {
+          const lastRsi = rsiData[rsiData.length - 1];
+          rsiSeries.update(lastRsi);
+          rsiValueText.textContent = lastRsi.value.toFixed(2);
+        }
+      }
+    }
+
+    // --- 8. ОБРАБОТЧИКИ СОБЫТИЙ ТУЛБАРА ---
+
+    // Смена пары
+    symbolSelect.addEventListener("change", (e) => {
+      currentSymbol = e.target.value;
+      candles = [];
+      loadData(false);
+    });
+
+    // Смена таймфрейма
+    tfButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        tfButtons.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentTimeframe = btn.dataset.tf;
+        candles = [];
+        loadData(false);
+      });
+    });
+
+    // Переключение RSI
+    toggleRsiBtn.addEventListener("click", () => {
+      showRsi = !showRsi;
+      toggleRsiBtn.textContent = `RSI (14): ${showRsi ? "ВКЛ" : "ВЫКЛ"}`;
+      subChartContainer.style.display = showRsi ? "block" : "none";
+      mainChartContainer.style.height = showRsi ? "75%" : "100%";
+      renderIndicators();
+    });
+
+    // Переключение SMA
+    toggleSmaBtn.addEventListener("click", () => {
+      showSma = !showSma;
+      toggleSmaBtn.textContent = `SMA (20): ${showSma ? "ВКЛ" : "ВЫКЛ"}`;
+      document.getElementById("smaPill").style.display = showSma ? "flex" : "none";
+      renderIndicators();
+    });
+
+    // Кнопки индикатора на экране (Eye, Gear, Trash)
+    document.getElementById("smaEyeBtn").addEventListener("click", () => {
+      showSma = !showSma;
+      document.getElementById("smaEyeBtn").textContent = showSma ? "👁" : "👁‍🗨";
+      renderIndicators();
+    });
+
+    document.getElementById("smaTrashBtn").addEventListener("click", () => {
+      showSma = false;
+      document.getElementById("smaPill").style.display = "none";
+      toggleSmaBtn.textContent = "SMA (20): ВЫКЛ";
+      smaSeries.setData([]);
+    });
+
+    document.getElementById("smaGearBtn").addEventListener("click", () => {
+      const newPeriod = prompt("Введите период SMA:", smaPeriod);
+      if (newPeriod && !isNaN(parseInt(newPeriod))) {
+        smaPeriod = parseInt(newPeriod);
+        document.querySelector("#smaPill span").textContent = `SMA ${smaPeriod}`;
+        renderIndicators();
+      }
+    });
+
+    // --- СТАРТ ПРИЛОЖЕНИЯ ---
+    loadData(false);
+  </script>
+</body>
+</html>
